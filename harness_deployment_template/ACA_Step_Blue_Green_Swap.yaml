@@ -1,0 +1,69 @@
+template:
+  name: ACA - Blue Green Swap
+  type: Step
+  spec:
+    type: ShellScript
+    timeout: 10m
+    spec:
+      shell: Bash
+      executionTarget: {}
+      delegateSelectors: []
+      source:
+        type: Inline
+        spec:
+          script: |-
+            #!/bin/bash
+            set -e
+            echo "  DEBUG: Start of Blue Green Swap"
+
+            echo "    DEBUG: exportedVariables"
+            echo "      Target deployment: "<+exportedVariables.getValue("pipeline.identify.targetDeployment")>
+            echo "    DEBUG: infra.variables"
+            echo "      Target containerapp name: <+infra.variables.appName>"
+            echo "      Target containerapp env name: <+infra.variables.appEnvName>"
+            echo "      Target resource group: <+infra.variables.resourceGroup>"
+
+            echo "    DEBUG: AZ Account Set"
+            az login --service-principal \
+              --username <+infra.variables.clientId> \
+              --password <+infra.variables.clientSecret> \
+              --tenant <+infra.variables.tenantId>
+
+            echo "    DEBUG: AZ Get Ingress"
+            az account set --subscription <+infra.variables.subscriptionId>
+
+            echo "    DEBUG: Shifting traffic to ${blue_or_green} deployment"
+            if [ "$blue_or_green" == "green" ]; then
+              green_weight=100
+              blue_weight=0
+            elif [ "$blue_or_green" == "blue" ]; then
+              green_weight=0
+              blue_weight=100
+            else
+              echo "ERROR: blue_or_green variable is not defined."
+              exit 1
+            fi
+
+            echo "      Green Weight: ${green_weight} Blue Weight: ${blue_weight}"
+
+            az containerapp ingress traffic set \
+                --name <+infra.variables.appName> \
+                --resource-group <+infra.variables.resourceGroup> \
+                --label-weight blue=$blue_weight green=$green_weight
+
+            az logout
+      environmentVariables:
+        - name: blue_or_green
+          type: String
+          value: <+input>
+      outputVariables: []
+    failureStrategies:
+      - onFailure:
+          errors:
+            - AllErrors
+          action:
+            type: MarkAsFailure
+  identifier: ACA_Blue_Green_Swap
+  versionLabel: "1.0"
+  tags: {}
+  icon: data:image/png;base64,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

@@ -1,0 +1,216 @@
+pipeline:
+  name: Azure Container Apps - BlueGreen
+  identifier: Azure_Container_Apps_BlueGreen
+  projectIdentifier: <project>
+  orgIdentifier: <org>
+  tags: {}
+  stages:
+    - stage:
+        name: Deploy to Dev
+        identifier: Deploy
+        description: ""
+        type: Deployment
+        spec:
+          deploymentType: CustomDeployment
+          customDeploymentRef:
+            templateRef: account.Azure_Container_Apps
+            versionLabel: "1.0"
+          service:
+            serviceRef: academoapp
+            serviceInputs:
+              serviceDefinition:
+                type: CustomDeployment
+                spec:
+                  artifacts:
+                    primary:
+                      primaryArtifactRef: <+input>
+                      sources: <+input>
+          execution:
+            steps:
+              - step:
+                  name: Fetch Instances
+                  identifier: fetchInstances
+                  type: FetchInstanceScript
+                  timeout: 10m
+                  spec: {}
+              - step:
+                  type: ShellScript
+                  name: Wake-up Demo Environment
+                  identifier: Wakeup_Demo_Env
+                  spec:
+                    shell: Bash
+                    executionTarget: {}
+                    source:
+                      type: Inline
+                      spec:
+                        script: |-
+                          #!/bin/bash
+                          fqdn=<+pipeline.stages.Deploy.spec.execution.steps.fetchInstances.deploymentInfoOutcome.serverInstanceInfoList[0].properties.acafqdn>
+                          curl -s "https://${fqdn}/api/env" | jq -r ".env.REVISION_COMMIT_ID"
+                    environmentVariables: []
+                    outputVariables: []
+                  timeout: 10m
+              - step:
+                  name: Identify Target Deployment
+                  identifier: Identify_Target_Deployment
+                  template:
+                    templateRef: account.ACA_Identify_Target_Deployment
+                    versionLabel: "1.0"
+              - stepGroup:
+                  name: Blue-Green Deployment
+                  identifier: BlueGreen_Deployment
+                  steps:
+                    - step:
+                        name: Stage Deployment
+                        identifier: Stage_Deployment
+                        template:
+                          templateRef: account.ACA_Blue_Green_Deploy
+                          versionLabel: "1.0"
+                    - parallel:
+                        - step:
+                            type: ShellScript
+                            name: Regression Tests
+                            identifier: Regression_Tests
+                            spec:
+                              shell: Bash
+                              executionTarget: {}
+                              source:
+                                type: Inline
+                                spec:
+                                  script: echo "Regression Tests"
+                              environmentVariables: []
+                              outputVariables: []
+                            timeout: 10m
+                        - step:
+                            type: ShellScript
+                            name: JMeter
+                            identifier: JMeter
+                            spec:
+                              shell: Bash
+                              executionTarget: {}
+                              source:
+                                type: Inline
+                                spec:
+                                  script: echo "JMeter"
+                              environmentVariables: []
+                              outputVariables: []
+                            timeout: 10m
+                        - step:
+                            type: ShellScript
+                            name: Selenium
+                            identifier: Selenium
+                            spec:
+                              shell: Bash
+                              executionTarget: {}
+                              source:
+                                type: Inline
+                                spec:
+                                  script: echo "Selenium"
+                              environmentVariables: []
+                              outputVariables: []
+                            timeout: 10m
+                    - step:
+                        name: Blue Green Swap
+                        identifier: Blue_Green_Swap
+                        template:
+                          templateRef: account.ACA_Blue_Green_Swap
+                          versionLabel: "1.0"
+                          templateInputs:
+                            type: ShellScript
+                            spec:
+                              environmentVariables:
+                                - name: blue_or_green
+                                  type: String
+                                  value: <+exportedVariables.getValue("pipeline.identify.targetDeployment")>
+              - parallel:
+                  - step:
+                      name: Validate Swap
+                      identifier: Validate_Swap
+                      template:
+                        templateRef: account.ACA_Validate_Swap
+                        versionLabel: "1.0"
+                  - step:
+                      type: Verify
+                      name: Continuous Verification
+                      identifier: Continuous_Verification
+                      spec:
+                        isMultiServicesOrEnvs: false
+                        type: Bluegreen
+                        monitoredService:
+                          type: Default
+                          spec: {}
+                        spec:
+                          sensitivity: HIGH
+                          duration: 5m
+                          failOnNoAnalysis: false
+                      timeout: 2h
+                      failureStrategies:
+                        - onFailure:
+                            errors:
+                              - Verification
+                            action:
+                              type: StageRollback
+                        - onFailure:
+                            errors:
+                              - Unknown
+                            action:
+                              type: ManualIntervention
+                              spec:
+                                timeout: 2h
+                                onTimeout:
+                                  action:
+                                    type: Ignore
+                      when:
+                        stageStatus: Success
+                        condition: <+pipeline.variables.devonly> == "false"
+              - step:
+                  type: Http
+                  name: HTTP Check
+                  identifier: HTTP_Check
+                  spec:
+                    url: <+"https://"+<+infra.variables.appName>+"."+<+exportedVariables.getValue("pipeline.identify.appDomain")>+"/api/env">
+                    method: GET
+                    headers: []
+                    inputVariables: []
+                    outputVariables: []
+                  timeout: 1m
+                  failureStrategies:
+                    - onFailure:
+                        errors:
+                          - AllErrors
+                        action:
+                          type: StageRollback
+            rollbackSteps:
+              - step:
+                  name: Revert Blue Green
+                  identifier: Revert_Blue_Green
+                  template:
+                    templateRef: account.ACA_Blue_Green_Swap
+                    versionLabel: "1.0"
+                    templateInputs:
+                      type: ShellScript
+                      spec:
+                        environmentVariables:
+                          - name: blue_or_green
+                            type: String
+                            value: <+exportedVariables.getValue("pipeline.identify.currentDeployment")>
+          environment:
+            environmentRef: azureacademo
+            deployToAll: false
+            infrastructureDefinitions:
+              - identifier: Dev_Azure_Container_Apps
+        tags: {}
+        failureStrategies:
+          - onFailure:
+              errors:
+                - AllErrors
+              action:
+                type: StageRollback
+  delegateSelectors:
+    - aca-delegate
+  variables:
+    - name: devonly
+      type: String
+      description: ""
+      required: false
+      value: "true"

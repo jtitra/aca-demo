@@ -1,0 +1,39 @@
+template:
+  name: ACA - Validate Swap
+  type: Step
+  spec:
+    type: ShellScript
+    timeout: 10m
+    spec:
+      shell: Bash
+      executionTarget: {}
+      delegateSelectors: []
+      source:
+        type: Inline
+        spec:
+          script: |-
+            #!/bin/bash
+            set -e
+            echo "  DEBUG: Start of Log Revision Detail"
+
+            echo "    DEBUG: infra.variables"
+            echo "      Target containerapp name: <+infra.variables.appEnvName>"
+            echo "      Target resource group: <+infra.variables.resourceGroup>"
+            echo "    DEBUG: exportedVariables"
+            echo "      App domain: "<+exportedVariables.getValue("pipeline.identify.appDomain")>
+
+            app_name=<+infra.variables.appName>
+            app_domain=<+exportedVariables.getValue("pipeline.identify.appDomain")>
+
+            echo "      ACA full url: https://${app_name}.${app_domain}/api/env"
+            curl -s https://$app_name.$app_domain/api/env | jq -r ".env"
+      environmentVariables: []
+      outputVariables: []
+    failureStrategies:
+      - onFailure:
+          errors:
+            - AllErrors
+          action:
+            type: MarkAsFailure
+  identifier: ACA_Validate_Swap
+  versionLabel: "1.0"

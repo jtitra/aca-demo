@@ -1,0 +1,79 @@
+template:
+  name: ACA - Blue Green Deploy
+  type: Step
+  spec:
+    type: ShellScript
+    timeout: 10m
+    spec:
+      shell: Bash
+      executionTarget: {}
+      delegateSelectors: []
+      source:
+        type: Inline
+        spec:
+          script: |-
+            #!/bin/bash
+            set -e
+            echo "  DEBUG: Start of Blue Green Deploy"
+
+            echo "    DEBUG: exportedVariables"
+            echo "      Target deployment: "<+exportedVariables.getValue("pipeline.identify.targetDeployment")>
+            echo "    DEBUG: environmentVariables"
+            echo "      Target artifact image: <+spec.environmentVariables.artifact_image>"
+            echo "      Target artifact tag: <+spec.environmentVariables.artifact_tag>"
+
+            app_name=<+infra.variables.appName>
+            resource_group=<+infra.variables.resourceGroup>
+            target_deployment=<+exportedVariables.getValue("pipeline.identify.targetDeployment")>
+            artifact_image=<+spec.environmentVariables.artifact_image>
+            artifact_tag=<+artifact.tag>
+
+
+            az login --service-principal \
+              --username <+infra.variables.clientId> \
+              --password <+infra.variables.clientSecret> \
+              --tenant <+infra.variables.tenantId>
+
+            az account set --subscription <+infra.variables.subscriptionId>
+            #az acr login --name harnessdemoacr
+
+            echo "    DEBUG: Checking if existing revision exists for tag: ${artifact_tag}"
+            aca_revisions=$(az containerapp revision list \
+                --name $app_name \
+                --resource-group $resource_group)
+            if echo $aca_revisions | jq -e --arg val "${artifact_tag}" '.[] | select(.properties.template.containers[].env[].value | contains($val))' > /dev/null; then
+              echo "      DEBUG: Revision already exists"
+            else
+              echo "      DEBUG: Creating a new revision"
+              az containerapp update \
+                --name $app_name \
+                --resource-group $resource_group \
+                --image mcr.microsoft.com/k8se/samples/test-app:$artifact_tag \
+                --revision-suffix $artifact_tag  \
+                --set-env-vars REVISION_COMMIT_ID=$artifact_tag
+            fi
+
+            echo "    DEBUG: Setting label: ${target_deployment} for revision: ${artifact_tag}"
+            az containerapp revision label add \
+              --name $app_name \
+              --resource-group $resource_group \
+              --label $target_deployment \
+              --revision "${app_name}--${artifact_tag}" \
+              --yes
+
+            az logout
+      environmentVariables:
+        - name: artifact_image
+          type: String
+          value: <+artifact.image>
+      outputVariables: []
+    failureStrategies:
+      - onFailure:
+          errors:
+            - AllErrors
+          action:
+            type: MarkAsFailure
+  identifier: ACA_Blue_Green_Deploy
+  versionLabel: "1.0"
+  tags: {}
+  icon: data:image/png;base64,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

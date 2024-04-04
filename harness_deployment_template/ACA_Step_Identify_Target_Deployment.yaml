@@ -1,0 +1,104 @@
+template:
+  name: ACA - Identify Target Deployment
+  type: Step
+  spec:
+    type: ShellScript
+    timeout: 10m
+    spec:
+      shell: Bash
+      executionTarget: {}
+      delegateSelectors: []
+      source:
+        type: Inline
+        spec:
+          script: |-
+            #!/bin/bash
+            set -e
+            echo "  DEBUG: Start of Identify Target Deployment"
+
+            echo "    DEBUG: infra.variables"
+            echo "      Target containerapp name: <+infra.variables.appName>"
+            echo "      Target containerapp env name: <+infra.variables.appEnvName>"
+            echo "      Target resource group: <+infra.variables.resourceGroup>"
+
+            app_name=<+infra.variables.appName>
+
+            exit_with_error() {
+              echo "$1"  # Echo the error message passed to the function
+              exit 1     # Exit with a status of 1 indicating an error
+            }
+
+            echo "    DEBUG: AZ Login"
+            az login --service-principal \
+              --username <+infra.variables.clientId> \
+              --password <+infra.variables.clientSecret> \
+              --tenant <+infra.variables.tenantId>
+
+            echo "    DEBUG: AZ Account Set"
+            az account set --subscription <+infra.variables.subscriptionId>
+
+            echo "    DEBUG: AZ Get Ingress"
+            ingress_traffic=$(az containerapp ingress traffic show \
+                --name <+infra.variables.appName> \
+                --resource-group <+infra.variables.resourceGroup>)
+
+            blue_weight=$(echo $ingress_traffic | jq -r '.[] | select(.label == "blue") | .weight')
+            green_weight=$(echo $ingress_traffic | jq -r '.[] | select(.label == "green") | .weight')
+            if [ "$blue_weight" -eq 100 ]; then
+              echo "    DEBUG: Active deployment: blue"
+              if [ "$green_weight" -ne 0 ]; then
+                exit_with_error "ERROR: Both cannot be active at the same time."
+              else
+                target_deployment="green"
+                current_deployment="blue"
+                echo "    DEBUG: Target deployment: ${target_deployment}"
+              fi
+            elif [ "$green_weight" -eq 100 ]; then
+              echo "    DEBUG: Active deployment: green"
+              if [ "$blue_weight" -eq 100 ]; then
+                exit_with_error "ERROR: Both cannot be active at the same time."
+              else
+                target_deployment="blue"
+                current_deployment="green"
+                echo "    DEBUG: Target deployment: ${target_deployment}"
+              fi
+            else
+              exit_with_error "ERROR: Neither label is set to weight 100."
+            fi
+
+            echo "    DEBUG: AZ Get ACA Domain"
+            app_domain=$(az containerapp env show \
+                --name <+infra.variables.appEnvName> \
+                --resource-group <+infra.variables.resourceGroup> \
+                --query properties.defaultDomain \
+                --output tsv \
+                | tr -d '\r\n')
+
+            echo "      ACA app domain: ${app_domain}"
+            echo "      ACA full url: https://${app_name}.${app_domain}/api/env"
+
+            az logout
+      environmentVariables: []
+      outputVariables:
+        - name: targetDeployment
+          type: String
+          value: target_deployment
+        - name: appDomain
+          type: String
+          value: app_domain
+        - name: currentDeployment
+          type: String
+          value: current_deployment
+      outputAlias:
+        key: identify
+        scope: Pipeline
+    failureStrategies:
+      - onFailure:
+          errors:
+            - AllErrors
+          action:
+            type: MarkAsFailure
+    commandFlags: []
+    policySets: []
+  identifier: ACA_Identify_Target_Deployment
+  versionLabel: "1.0"
